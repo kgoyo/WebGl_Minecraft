@@ -1,0 +1,301 @@
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+    <title>Minecraft 3D (ish)</title>
+    <script id="vertex-shader" type="x-shader/x-vertex">
+precision mediump float;
+
+attribute vec4 vPosition;
+attribute vec4 vBlockCenter;
+attribute float vRotBool;
+attribute vec4 vNormal;
+attribute vec2 vTexCoord;
+
+varying vec2 fTexCoord;
+varying vec3 N, L, E;
+varying vec3 N_torch, L_torch, E_torch;
+varying float distanceTorch;
+
+uniform mat4 modelView;
+uniform mat4 projection;
+uniform mat4 cubeRotation;
+uniform vec4 lightPosition;
+uniform vec3 eye;
+uniform float torchOn;
+
+void main() {
+	
+	fTexCoord = vTexCoord;
+	
+    //rotations
+	mat4 trans1 = mat4(
+		1.0, 0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0, 0.0,
+		0.0, 0.0, 1.0, 0.0,
+		-vBlockCenter.x, -vBlockCenter.y, -vBlockCenter.z, 1.0
+	);
+
+	mat4 trans2 = mat4(
+		1.0, 0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0, 0.0,
+		0.0, 0.0, 1.0, 0.0,
+		vBlockCenter.x, vBlockCenter.y, vBlockCenter.z, 1.0
+	);
+
+	mat4 totalRotationMatrix = trans2 * cubeRotation * trans1;
+
+	if (vRotBool < 0.5){
+		totalRotationMatrix = mat4(1.0);
+	}
+
+
+    // sun lighting
+    vec3 pos = (totalRotationMatrix * vPosition).xyz;
+    vec3 light = lightPosition.xyz;
+    L = normalize(light);// - pos);
+    E = normalize(eye - pos); //origo - pos
+    N = normalize(totalRotationMatrix * vNormal).xyz;
+
+	// torch lighting
+	if(torchOn > 0.5){
+		L_torch = normalize(eye - pos);// - pos);
+		E_torch = L_torch; //origo - pos
+		N_torch = normalize(totalRotationMatrix * vNormal).xyz;
+		distanceTorch = distance(eye,pos);
+	}
+
+    gl_Position = projection*modelView*totalRotationMatrix*vPosition;
+}
+
+    </script>
+
+    <script id="fragment-shader" type="x-shader/x-fragment">
+
+precision mediump float;
+
+varying vec2 fTexCoord;
+varying vec3 N, L, E;
+varying vec3 N_torch, L_torch, E_torch;
+varying float distanceTorch;
+
+uniform vec4 ambientProductTorch, diffuseProductTorch, specularProductTorch;
+uniform vec4 ambientProduct, diffuseProduct, specularProduct;
+uniform float shininess;
+uniform float torchOn;
+uniform sampler2D texture;
+
+void
+main() {
+
+	vec4 color = vec4(1.0, 1.0, 1.0, 1.0);
+
+	// Sun lighting
+    vec3 H = normalize(L + E);
+    vec4 ambient = ambientProduct;
+	float kd = max(dot(L,N), 0.0);
+    vec4 diffuse = kd*diffuseProduct;
+    float ks = pow(max(dot(N,H), 0.0), shininess);
+    vec4 specular = ks * specularProduct;
+    if (dot(L,N) < 0.0) specular = vec4(0.0, 0.0, 0.0, 1.0);
+    vec4 sunColor = diffuse + specular + ambient;
+
+	// Attenuation factor for torch lighting
+	float attenuation = 1.0/(0.5+0.05*distanceTorch+0.05*distanceTorch*distanceTorch);
+
+	// Torch lighting
+	if(torchOn > 0.5){
+		vec3 H_torch = normalize(L_torch + E_torch);
+		ambient = ambientProductTorch;
+		kd = max(dot(L_torch,N_torch), 0.0);
+		diffuse = kd*diffuseProductTorch;
+		ks = pow(max(dot(N_torch,H_torch), 0.0), shininess);
+		specular = ks * specularProductTorch;
+		if (dot(L_torch,N_torch) < 0.0) specular = vec4(0.0, 0.0, 0.0, 1.0);
+		// only the diffuse and specular components are attenuated - see p. 318 (also, every online resource I can find says this)
+		// as a result, the torch should not have any ambient components
+		vec4 torchColor = (diffuse + specular)*attenuation + ambient;
+		color = sunColor + torchColor;
+    } else {
+		color = sunColor;
+	}
+
+	// gl_FragColor.a = 1.0;
+    // gl_FragColor.xyz = E;
+    color.a = 1.0;
+    gl_FragColor = color * texture2D(texture, fTexCoord);
+}
+    </script>
+
+	<!-- Sun shaders below -->
+
+    <script id="vertex-sun" type="x-shader/x-vertex">
+precision mediump float;
+attribute vec4 vPosition;
+
+uniform mat4 modelView;
+uniform mat4 projection;
+
+void main() {
+	gl_Position = projection * modelView * vPosition;
+}
+	</script>
+
+	<script id="fragment-sun" type="x-shader/x-fragment">
+precision mediump float;
+void main() {
+	gl_FragColor = vec4(1.0,1.0,0.0,1.0);
+}
+    </script>
+
+	<!-- Pick shaders below -->
+
+	<script id="vertex-pick" type="x-shader/x-vertex">
+precision mediump float;
+
+attribute vec4 vPosition;
+attribute vec4 vNormal;
+attribute vec4 vBlockIndex;
+
+varying vec4 fNormal;
+varying vec3 fBlockIndex;
+
+uniform mat4 modelView;
+uniform mat4 projection;
+
+void main() {
+	fNormal = vNormal;
+	fBlockIndex = vBlockIndex.xyz;
+    gl_Position = projection*modelView*vPosition;
+}
+    </script>
+
+
+	<script id="fragment-pick" type="x-shader/x-fragment">
+precision mediump float;
+
+varying vec4 fNormal;
+varying vec3 fBlockIndex;
+
+void main() {
+
+	vec4 color = vec4(0.0);
+	color.xyz = fBlockIndex.xyz;
+	color.x /= 255.0;
+	color.y /= 255.0;
+	color.z /= 255.0;
+
+	if(fNormal.x < -0.5){
+		color.w = 1.0;
+	} else if ( fNormal.x > 0.5){
+		color.w = 2.0;
+	} else if ( fNormal.y < -0.5){
+		color.w = 3.0;
+	} else if ( fNormal.y > 0.5){
+		color.w = 4.0;
+	} else if ( fNormal.z < -0.5){
+		color.w = 5.0;
+	} else if ( fNormal.z > 0.5){
+		color.w = 6.0;
+	}
+
+	color.w /= 255.0;
+
+	gl_FragColor = color;
+}
+    </script>
+
+    <script id="vertex-wf" type="x-shader/x-vertex">
+precision mediump float;
+
+attribute vec4 vPosition;
+
+uniform mat4 modelView;
+uniform mat4 projection;
+
+void main() {
+    gl_Position = projection*modelView*vPosition;
+}
+    </script>
+
+
+	<script id="fragment-wf" type="x-shader/x-fragment">
+precision mediump float;
+
+void main() {
+
+	gl_FragColor = vec4(0.0,0.0,0.0,1.0);
+}
+    </script>
+
+
+    <script type="text/javascript" src="./lib/webgl-utils.js"></script>
+    <script type="text/javascript" src="./lib/initShaders.js"></script>
+    <script type="text/javascript" src="./lib/MV.js"></script>
+    <script type="text/javascript" src="./Minecraft.js"></script>
+
+  </head>
+  <body>
+    <center>
+      <table>
+        <tr>
+          <td>
+            <canvas id="gl-canvas" width="800" height="600">
+              Oops ... your browser doesn't support the HTML5 canvas element
+            </canvas>
+
+            <br />
+            <br />
+
+            <center>
+              Contols: Click on the canvas for camera controls. </br>
+              Time of day: <input type="range" id="sun-slider" min="0" = max="360" step="1" value="80" />
+            <div id="sun-angle-div">Current position of the sun: 80 degrees</div>
+            </center>
+            
+          </td>
+          <td>
+            <select id ="material-menu" size = "7">
+	          <option selected value = "1">Grass</option>
+	          <option value = "2">Stone</option>
+	          <option value = "3">Dirt</option>
+	          <option value = "4">Wood</option>
+	          <option value = "5">Sand</option>
+	          <option value = "6">Diamond</option>
+	          <option value = "7">Pumpkin</option>
+            </select>
+          </td>
+          <td>
+            <b>Keyboard controls:</b>
+            <table>
+              <tr>
+                <td>W</td>
+                <td>Move Forwards</td>
+              </tr>
+              <tr>
+                <td>S</td>
+                <td>Move Backwards</td>
+              </tr>
+              <tr>
+                <td>A</td>
+                <td>Strafe Left</td>
+              </tr>
+              <tr>
+                <td>D</td>
+                <td>Strafe Right</td>
+              </tr>
+              <tr>
+                <td>M</td>
+                <td>Toggle map view</td>
+              </tr>
+              <tr>
+                <td>T</td>
+                <td>Toggle torch light</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </center>
+    <img id = "texImage" src = "std-texture.png" hidden></img>
+  </body>
+</html>
